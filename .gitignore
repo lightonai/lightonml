@@ -1,0 +1,15 @@
+*.pyc
+data/
+__pycache__/
+*.npz
+*.so
+*.o
+examples/testkrc.py
+lightonml.egg-info/
+dist/
+build/
+**.ipynb_checkpoints
+.idea/
+.eggs/
+.tox
+.python-version
