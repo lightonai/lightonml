@@ -62,6 +62,6 @@ setup(
     install_requires=["numexpr==2.7.*", "numpy", "requests", "attrs>=19"],
     extras_require={"torch": ["torch>=1.0"],
                     "sklearn": ["scikit-learn"],
-                    "drivers": ["lightonopu>=1.3b1"]},
+                    "drivers": ["lightonopu==1.3.*"]},
     zip_safe=False
 )
