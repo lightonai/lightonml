@@ -22,7 +22,8 @@ Optional dependencies are :
 
 Main documentation can be found at the [API docs website](https://docs.lighton.ai).
 
-Check the examples directory in the repo, if you don't have access to an OPU you can run the code locally with a simulated OPU
+Check the examples directory in the repo, especially the [Get started notebook](examples/get_started.ipynb). 
+If you don't have access to an OPU you can run the code locally with a simulated OPU (see [Get started](examples/get_started.ipynb) last section to find out how).
 
 For getting help on the LightOn Cloud service check the [Community website](https://community.lighton.ai/)
 
