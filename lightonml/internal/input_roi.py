@@ -5,6 +5,7 @@
 from lightonml.internal.types import InputRoiStrategy, Roi, IntList, Tuple2D
 import numpy as np
 from typing import Tuple, Union, Optional
+import warnings
 
 
 class InputRoi:
@@ -34,11 +35,11 @@ class InputRoi:
     # noinspection PyDefaultArgument
     def check_nb_ones(self, n_ones: int, 
                       size: Union[int, Tuple2D, np.ndarray],
-                      checked_out: dict) -> float:
+                      checked_out: dict = {}) -> float:
         """
         Find if the number of ones to be displayed will give proper signal
         on the output
-
+i
         Parameters
         ----------
         n_ones: int
@@ -54,6 +55,7 @@ class InputRoi:
              * -1 if not enough ones
              * 0 if enough
              * ratio over the maximum allowed, if too much (will saturate)
+             (this allows to lower exposure in the TransformRunner)
         """
         # number of ones must be added to the size of the outside ROI,
         # since it's padded with ones
@@ -72,7 +74,7 @@ class InputRoi:
 
     # noinspection PyDefaultArgument
     def compute_roi(self, strategy: InputRoiStrategy, n_features,
-                    n_ones: Optional[int] = None, checked_out={}) -> Roi:
+                    n_ones: Optional[int] = None, checked_out: dict = {}) -> Roi:
         """
         This method *tries* to find the best ROI for the given features
 
@@ -130,10 +132,18 @@ class InputRoi:
 
         elif strategy is InputRoiStrategy.small:
             roi = self._small_roi(n_features)
+            # Check the number of ones
+            if n_ones is not None and self.check_nb_ones(n_ones, roi[1], checked_out) < 0:
+                warnings.warn("The input data is too sparse for the input device.\n"
+                              "However the linear transform isn't impacted by data sparsity.")
             return self._check_roi(roi)
 
         elif strategy is InputRoiStrategy.full:
             roi, factor = self._macro_roi(n_features, -1)
+            # Check the number of ones
+            if n_ones is not None and self.check_nb_ones(n_ones*factor, roi[1], checked_out) < 0:
+                warnings.warn("The input data is too sparse for the input device.\n"
+                              "However the linear transform isn't impacted by data sparsity.")
             return self._check_roi(roi)
 
         else:
@@ -172,9 +182,9 @@ class InputRoi:
 
     def _check_roi(self, roi: Roi) -> Roi:
         if (np.add(roi[0], roi[1]) > self.input_shape).any():
-            raise ValueError("ROI {} doesn't fit in input size {}".format(roi, self.input_shape))
+            raise ValueError(f"ROI {roi} doesn't fit in input size {self.input_shape}")
         if np.any(np.asarray(roi[0]) < 0):
-            raise ValueError("ROI {} has negative offset".format(roi))
+            raise ValueError(f"ROI {roi} has negative offset")
         return tuple(roi[0]), tuple(roi[1])
 
     def _small_roi(self, n_features) -> Roi:
@@ -192,11 +202,11 @@ class InputRoi:
         """
         if len(n_elements) == 2:
             if (n_elements > shape).any():
-                raise ValueError("2D features don't fit in input shape")
+                raise ValueError(f"2D features {n_elements} don't fit in input shape {shape}")
             return n_elements
         else:
             if n_elements > np.prod(shape):
-                raise ValueError("1D features don't fit in input shape")
+                raise ValueError(f"1D features {n_elements} don't fit in input shape {shape}")
             # if 1D input, make it a square with correct size
             side = int(np.ceil(np.sqrt(n_elements)))
             small_side = np.min(shape)

@@ -12,6 +12,7 @@ from lightonml.internal import utils
 """
 This is the Python equivalent of opu_config.sh shell script
 """
+host_path = Path("/etc/lighton/host.json")
 
 
 # noinspection PyUnresolvedReferences
@@ -37,7 +38,6 @@ def load_config(override_location: str = "", trace_fn=utils.blank_fn):
     if override_location:
         return get_config_from(override_location, trace_fn)
 
-    host_path = Path("/etc/lighton/host.json")
     if not host_path.exists():
         # If no host configuration, fail back to normal location, opu.json
         config_location = "/etc/lighton/opu.json"
@@ -47,11 +47,26 @@ def load_config(override_location: str = "", trace_fn=utils.blank_fn):
     return get_config_from(config_location, trace_fn)
 
 
-def get_host_option(key:str, default:Any = None):
+def host_has_opu_config():
+    return host_path.exists() or Path("/etc/lighton/opu.json").exists()
+
+
+def get_host_option(key: str, default: Any = None):
     """Reads lighton's host.json option"""
-    host_path = Path("/etc/lighton/host.json")
     if host_path.exists():
         host = json.loads(host_path.read_text())
         return host.get(key, default)
     else:
         return default
+
+
+def opu_version(config_d: dict) -> str:
+    """Given an OPU config dict, returns array with OPU name, version, and core information"""
+    opu_name = config_d.get('name', "NA")
+    opu_version_ = config_d.get('version', "NA")
+    opu_location = config_d.get('location', "NA")
+    version = f"OPU {opu_name}-{opu_version_}-{opu_location}; "
+    opu_type = config_d.get('core_type', "NA")
+    opu_core_version = config_d.get('core_version', "NA")
+    version += f"core type {opu_type}, core version {opu_core_version}"
+    return version

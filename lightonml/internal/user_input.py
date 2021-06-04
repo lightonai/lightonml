@@ -68,7 +68,7 @@ class OpuUserInput:
         return cls(array, _2d_batch, traits, n_samples)
 
     @classmethod
-    def from_input(cls, array, packed, is_2d_features, n_2d_features: tuple = None):
+    def from_input(cls, array, packed=False, is_2d_features=False, n_2d_features: tuple = None):
         if n_2d_features is not None:
             assert packed, "n_2d_features can only be specified with packed input"
         # packed_2d means user says is_2d_features, with packed input
@@ -161,24 +161,27 @@ class OpuUserInput:
             if not ((sampled_X == 0) | (sampled_X == 1)).all():
                 raise ValueError('The input array should be binary - contain only 0s and 1s.')
 
-    def reshape_input(self):
+    def reshape_input(self, raveled_features=False, leave_single_dim=False):
         """
         Returns input with shape suited for formatting and transform.
 
         2D samples are reshaped to 1D.
-        2D features are kept as-is.
+        2D features are kept as-is, unless raveled_features is True.
         Also, if it's a batch of a single vector (first dimension being one),
-        returns a view without the first dimension
+        returns a view without the first dimension, unless leave_single_dim is True
         """
-        if self.is_batch:
+        if self.is_batch or leave_single_dim:
             # When 2D batch, this will transform it into a 1D batch.
             sample_shape = (self.n_samples_s,)
         else:
+            # Remove the single dimension when not batch, and not leave_single_dim
             sample_shape = ()
 
         if self._traits.packed:
             # when packed, just take the last dimension
             feature_shape = (self.X.shape[-1], )
+        elif raveled_features:
+            feature_shape = (self.n_features_s, )
         else:
             feature_shape = self.n_features
 
@@ -191,14 +194,40 @@ class OpuUserInput:
         """Do the necessary reshape of output vector if number of samples are 2D"""
         # return to a 3d shape by taking the first 2 dims of the initial shape
         if self._2d_batch:
-            shape = self._n_samples + (-1,)
+            out_shape = self._n_samples + (-1,)
         else:
-            shape = Y.shape
+            out_shape = Y.shape
 
-        if not self.is_batch and self.X.shape[0] == 1:
-            shape = (1,) + shape
+        # If X is a single vector with explicit first dimension to 1, add it back
+        # to output shape
+        if not self.is_batch and self.X.shape[0] == 1 and out_shape[0] != 1:
+            out_shape = (1,) + out_shape
 
-        return Y.reshape(shape)
+        return Y.reshape(out_shape)
+
+    def unravel_features(self, X):
+        """Return features unraveled, but keeping n_samples.
+        Also if self is single, remove the first dimension.
+
+        For use after encoding the batches in linear, before formatting+transform
+        X has the shape of self.reshape_input(raveled_features=True, leave_single_dim=True)
+
+        Since the batch encoding changes nb of samples, we expect them to be different that self,
+         but number of features need to be the same
+        """
+        assert X.ndim == 2
+        n_samples = X.shape[0]
+        n_features = X.shape[1]
+        assert n_features == self.n_features_s
+        assert not self._traits.packed  # currently unsupported
+
+        if n_samples > 1:
+            sample_shape = (n_samples,)
+        else:
+            # Remove the single dimension when not batch
+            sample_shape = ()
+        feature_shape = self.n_features
+        return X.reshape(sample_shape + feature_shape)
 
     def __str__(self):
         bit_pack_str = "bit-packed" if self._traits.packed else "not bit-packed"

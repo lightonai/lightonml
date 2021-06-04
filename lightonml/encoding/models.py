@@ -225,6 +225,7 @@ def train(model, dataloader, optimizer, criterion=F.mse_loss, epochs=10, beta_in
     model = model.to(device)
     for e in range(epochs):
         tot_loss = 0.
+        i = 0  # mute warning in later verbose
         for i, data in enumerate(dataloader):
             if isinstance(data, list):
                 data, _ = data

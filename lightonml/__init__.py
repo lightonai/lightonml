@@ -26,6 +26,23 @@ _logger = None
 # Set to 0, 1, 2 or 3
 _verbose_level = 0
 _has_warned_spd = False
+_ml_data_dir = ""
+
+
+def get_ml_data_dir():
+    """Set the location the directory used in lightonml.datasets"""
+    global _ml_data_dir
+    return _ml_data_dir
+
+
+def set_ml_data_dir(value):
+    """Set the location the directory used in lightonml.datasets
+
+    Overrides location defined in /etc/lighton/host.json or ~/.lighton.json
+    Overridden by environment variable LIGHTONML_DATA_DIR
+    """
+    global _ml_data_dir
+    _ml_data_dir = value
 
 
 # noinspection PyUnresolvedReferences
@@ -108,4 +125,5 @@ def __init_logger():
 
 
 # Finally make OPU available at the package level
+# noinspection PyPep8
 from lightonml.opu import OPU

@@ -12,8 +12,7 @@ from lightonml.internal.simulated_device import SimulatedOpuDevice
 class OPUMap(BaseEstimator, TransformerMixin):
     """Adapter of the OPU to scikit-learn.
     Transform method is mapped to `transform <lightonml.opu.OPU.transform>` of
-    the `OPU <lightonml.opu.OPU>` class, depending on `ndims` parameter
-    at the construction.
+    the `OPU <lightonml.opu.OPU>` class.
 
     .. seealso:: `lightonml.opu.OPU`
 
@@ -22,7 +21,7 @@ class OPUMap(BaseEstimator, TransformerMixin):
     n_components: int,
         dimensionality of the target projection space.
     opu : lightonml.opu.OPU,
-        optical processing unit instance
+        optical processing unit instance (created at init if not provided)
     ndims : int,
         number of dimensions of an input. Can be 1 or 2.
         if ndims is 1, transform accepts 1d vector or batch of 1d vectors.
@@ -37,6 +36,8 @@ class OPUMap(BaseEstimator, TransformerMixin):
         number of 2d features if the input is packed
     simulated: bool, default False,
         use real or simulated OPU
+    linear: bool, default False,
+        use the linear version of the OPU transform (lightonml.opu.OPU.linear_transform)
     max_n_features: int, optional
         maximum number of binary features that the OPU will transform
         used only if simulated=True, in order to initiate the random matrix
@@ -64,12 +65,14 @@ class OPUMap(BaseEstimator, TransformerMixin):
         number of 2d features if the input is packed
     simulated: bool, default False,
         use real or simulated OPU
+    linear: bool, default False,
+        use the linear version of the OPU transform (lightonml.opu.OPU.linear_transform)
     max_n_features: int, optional
         maximum number of binary features that the OPU will transform
         used only if simulated=True, in order to initiate the random matrix
     """
     def __init__(self, n_components, opu=None, ndims=1, n_2d_features=None, packed=False,
-                 simulated=False, max_n_features=None, verbose_level=-1):
+                 simulated=False, max_n_features=None, verbose_level=-1, linear=False):
         # verbose_level shouldn't be used anymore, but put it as attributes
         # in order to comply with sklearn estimator
         if verbose_level >= 0:
@@ -101,6 +104,7 @@ class OPUMap(BaseEstimator, TransformerMixin):
         self.n_2d_features = n_2d_features
         self.packed = packed
         self.simulated = simulated
+        self.linear = linear
         self.max_n_features = max_n_features
         self.fitted = False
 
@@ -162,7 +166,8 @@ class OPUMap(BaseEstimator, TransformerMixin):
         if not self.fitted:
             print("OPUMap was not fit to data. Performing fit on the input with default parameters...")
             self.fit(X)
-        return np.array(self.opu.transform(X))
+        transform = self.opu.linear_transform if self.linear else self.opu.transform
+        return np.array(transform(X))
 
     def open(self):
         self.opu.open()

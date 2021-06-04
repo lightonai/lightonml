@@ -1,31 +1,5 @@
-import subprocess
 from pathlib import Path
-
 from setuptools import find_packages, setup
-
-
-def version_from_git():
-    """
-    Get version from git tags
-    git describe gives the most recent tag, and the number of commits
-    between it and the current HEAD. Use it to output a version compatible
-    with PEP440, <tag.postN>, with N being the number of commits from the tag.
-    """
-    if subprocess.run("git rev-parse --is-inside-work-tree".split(" "),
-                      stdout=subprocess.PIPE).returncode != 0:
-        return "0.0"
-
-    git_describe = subprocess.run("git describe --tags --match [0-9]*".split(" "),
-                                  check=True, stdout=subprocess.PIPE) \
-        .stdout.decode("utf8").strip()
-    t = git_describe.split("-")
-    # If we're exactly at the git tag, there's no "-" and return the full string
-    if len(t) == 1:
-        return t[0]
-    # If not, the number after is the number of commits to the latest tag
-    if len(t) >= 2:
-        return t[0]+".post"+t[1]
-    raise RuntimeError("Failed to parse git describe: " + git_describe)
 
 
 DESCRIPTION = 'LightOn technologies for Large scale Machine Learning with Optical Processing Unit'
@@ -33,7 +7,8 @@ __here__ = Path(__file__).absolute().parent
 
 setup(
     name='lightonml',
-    version=version_from_git(),
+    use_scm_version=True,
+    setup_requires=['setuptools_scm'],
     author='LightOn AI Research',
     author_email='iacopo@lighton.io,charles@lighton.io,igor@lighton.io',
     url="https://docs.lighton.ai",
@@ -48,6 +23,7 @@ setup(
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Science/Research",
@@ -62,6 +38,6 @@ setup(
     install_requires=["numexpr==2.7.*", "numpy", "requests", "attrs>=19"],
     extras_require={"torch": ["torch>=1.0"],
                     "sklearn": ["scikit-learn"],
-                    "drivers": ["lightonopu==1.3.*"]},
+                    "drivers": ["lightonopu==1.4.*"]},
     zip_safe=False
 )

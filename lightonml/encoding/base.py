@@ -1,6 +1,7 @@
 # -*- coding: utf8
-"""Encoders
-
+"""
+Encoders
+--------------------
 These modules contains implementations of Encoders that can transform data
 in the binary `uint8` format required by the OPU. Compatible with numpy.ndarray
 and torch.Tensor.
@@ -26,9 +27,9 @@ def _array_to_tensor(X, is_tensor):
 
 def preserve_type(transform):
     @functools.wraps(transform)
-    def wrapper(instance, X):
+    def wrapper(instance, X, *args, **kwargs):
         X, is_tensor = _tensor_to_array(X)
-        Z = transform(instance, X)
+        Z = transform(instance, X, *args, **kwargs)
         return _array_to_tensor(Z, is_tensor)
     return wrapper
 
@@ -44,7 +45,7 @@ class BaseTransformer:
 
         :param X: 2D np.ndarray or torch.Tensor
         :param y: 1D np.ndarray or torch.Tensor
-        :return: Encoder object
+        :return: Encoder object 
         """
         return self
 
@@ -59,136 +60,6 @@ class BaseTransformer:
 
     def fit_transform(self, X, y=None):
         return self.fit(X, y).transform(X)
-
-
-# noinspection PyPep8Naming
-class SeparatedBitPlanEncoder(BaseTransformer):
-    """Implements an encoding that works by separating bitplans.
-
-    ``n_bits + starting_bit`` must be lower than the bitwidth of data that are going to be fed to the encoder.
-    E.g. if ``X.dtype`` is ``uint8``, then ``n_bits + starting_bit`` must be lower than 8.
-    If instead ``X.dtype`` is ``uint32``, then ``n_bits + starting_bit`` must be lower than 32.
-
-    Read more in the Examples section.
-
-    Parameters
-    ----------
-    n_bits: int, defaults to 8,
-        number of bits to keep during the encoding. Must be positive.
-    starting_bit: int, defaults to 0,
-        bit used to start the encoding, previous bits will be thrown away. Must be positive.
-
-    Attributes
-    ----------
-    n_bits: int,
-        number of bits to keep during the encoding.
-    starting_bit: int,
-        bit used to start the encoding, previous bits will be thrown away.
-
-    """
-    def __init__(self, n_bits=8, starting_bit=0):
-        if n_bits <= 0:
-            raise ValueError('n_bits must be a positive integer.')
-        if starting_bit < 0:
-            raise ValueError('starting_bit must be 0 or a positive integer.')
-        self.n_bits = n_bits
-        self.starting_bit = starting_bit
-
-    @preserve_type
-    def transform(self, X):
-        """Performs the encoding.
-
-        Parameters
-        ----------
-        X : 2D np.ndarray or torch.Tensor of uint8, 16, 32 or 64 [n_samples, n_features],
-            input data to encode.
-
-        Returns
-        -------
-        X_enc: 2D np.ndarray or torch.Tensor of uint8 [n_samples*n_bits, n_features]
-            encoded input data.
-
-        """
-        bitwidth = X.dtype.itemsize*8
-        if self.n_bits+self.starting_bit > bitwidth:
-            raise ValueError('n_bits + starting_bit is greater than bitwidth of input data: '
-                             '{}+{} > {}'.format(self.n_bits, self.starting_bit, bitwidth))
-
-        n_samples, n_features = X.shape
-        # add a dimension [n_samples, n_features, 1] and returns a view of the data as uint8
-        X_uint8 = np.expand_dims(X, axis=2).view(np.uint8)
-
-        # Unpacks the bits along the auxiliary axis
-        X_uint8_unpacked = np.unpackbits(X_uint8, axis=2)
-
-        # Reverse the order of bits: from LSB to MSB
-        X_uint8_reversed = np.flip(X_uint8_unpacked, axis=2)
-
-        X_enc = np.transpose(X_uint8_reversed, [0, 2, 1])
-
-        shape = (n_samples * self.n_bits, n_features)
-        X_enc = X_enc[:, self.starting_bit:self.n_bits + self.starting_bit, :].reshape(shape)
-        return X_enc
-
-
-# noinspection PyPep8Naming
-class MixingBitPlanDecoder(BaseTransformer):
-    """Implements a decoding that works by mixing bitplanes.
-
-    ``n_bits`` MUST be the same value used in SeparatedBitPlanEncoder.
-    Read more in the Examples section.
-
-    Parameters
-    ----------
-    n_bits: int, defaults to 8,
-        number of bits used during the encoding.
-    decoding_decay: float, defaults to 0.5,
-        decay to apply to the bits during the decoding.
-
-    Attributes
-    ----------
-    n_bits: int,
-        number of bits used during the encoding.
-    decoding_decay: float, defaults to 0.5,
-        decay to apply to the bits during the decoding.
-
-    """
-    def __init__(self, n_bits=8, decoding_decay=0.5):
-        self.n_bits = n_bits
-        self.decoding_decay = decoding_decay
-
-    @preserve_type
-    def transform(self, X):
-        """Performs the decoding.
-
-        Parameters
-        ----------
-        X : 2D np.ndarray of uint8 or uint16,
-            input data to decode.
-
-        Returns
-        -------
-        X_dec : 2D np.ndarray of floats
-            decoded data.
-        """
-        n_out, n_features = X.shape
-        n_dim_0 = int(n_out / self.n_bits)
-
-        if n_dim_0 * self.n_bits * n_features != X.size:
-            raise ValueError('Check that you used the same number of bits in encoder and decoder.')
-
-        X = np.reshape(X, (n_dim_0, self.n_bits, n_features))
-        # compute factors for each bit to weight their significance
-        decay_factors = (self.decoding_decay ** np.arange(self.n_bits)).astype('float32')
-        if self.n_bits < 16:
-            d = {'X' + str(i): X[:, i] for i in range(self.n_bits)}
-            d.update({'decay_factors' + str(i): decay_factors[i] for i in range(self.n_bits)})
-            eval_str = ' + '.join(['X' + str(i) + '*' + 'decay_factors' + str(i) for i in range(self.n_bits)])
-            X_dec = ne.evaluate(eval_str, d)
-        else:
-            # fallback to slower version if n_bits > 15 because of https://github.com/lightonai/lightonml/issues/58
-            X_dec = np.einsum('ijk,j->ik', X, decay_factors).astype('float32')
-        return X_dec
 
 
 class ConcatenatedBitPlanEncoder(BaseTransformer):
@@ -360,7 +231,7 @@ class Float32Encoder(BaseTransformer):
 
         Parameters
         ----------
-        X : 2D np.ndarray of uint8, 16, 32 or 64 [n_samples, n_features],
+        X : 2D np.ndarray of float32 [n_samples, n_features],
             input data to encode.
 
         Returns
@@ -429,7 +300,7 @@ class ConcatenatedFloat32Encoder(BaseTransformer):
 
         Parameters
         ----------
-        X : 2D np.ndarray of uint8, 16, 32 or 64 [n_samples, n_features],
+        X : 2D np.ndarray of float32 [n_samples, n_features],
             input data to encode.
 
         Returns
@@ -441,7 +312,7 @@ class ConcatenatedFloat32Encoder(BaseTransformer):
         # create a new axis and separate the binary representation into 4 uint8
         X_uint8 = np.expand_dims(X, axis=2).view('uint8')
         # reverse the ordering of the uint8 before unpacking
-        # it is not done the other way around because the 4 butes of float32 are stored
+        # it is not done the other way around because the 4 bytes of float32 are stored
         # one after the other, it's not one block of 32 bits
         X_uint8_reversed = np.flip(X_uint8, axis=2)
         X_bits = np.unpackbits(X_uint8_reversed, axis=2)
@@ -493,6 +364,7 @@ class BinaryThresholdEncoder(BaseTransformer):
         self : BinaryThresholdEncoding
         """
         if isinstance(self.threshold_enc, str):
+            # noinspection PyTypeChecker
             self.threshold_enc = np.median(X, axis=0)  # the median is feature-wise
         else:
             if self.threshold_enc < X.min() or self.threshold_enc > X.max():
@@ -505,13 +377,13 @@ class BinaryThresholdEncoder(BaseTransformer):
 
         Parameters
         ----------
-        X : np.ndarray
+        X : np.ndarray  or torch.Tensor
             the input data to encode.
 
         Returns
         -------
-        X_enc : np.ndarray of uint8 containing only zeros and ones
-            the encoded data.
+        X_enc : np.ndarray  or torch.Tensor
+                uint8 containing only zeros and ones the encoded data.
         """
         if isinstance(self.threshold_enc, str):
             raise RuntimeError("If threshold_enc is 'auto', fit must be called before transform.")
@@ -623,6 +495,8 @@ class MultiThresholdEncoder(BaseTransformer):
             thresholds = self.thresholds[:, None, None]
         elif self.thresholds.ndim == 2:
             thresholds = self.thresholds.T[:, None, :]
+        else:
+            raise RuntimeError("Unexpected threshold.ndim " + self.thresholds.ndim)
         X = np.repeat(X[None, ...], n_thres, axis=0)
         X = X > thresholds
         X_enc = np.concatenate([X[i] for i in range(thresholds.shape[0])], axis=-1).astype('uint8')
@@ -748,3 +622,126 @@ class NoDecoding(BaseTransformer):
     """Implements a No-Op Decoding class for API consistency."""
     def transform(self, X):
         return X
+
+
+class SeparatedBitPlanEncoder(BaseTransformer):
+    """
+    Implements an encoder for floating point input
+
+    Parameters
+    ----------
+    precision: int, optional
+        The number of binary projections that are preformed to reconstruct an unsigned floating point projection.
+        if the input contains both positive and negative values, the total number of projections is 2*precision
+
+    Returns
+    -------
+    X_bits: np.array(dtype = np.unit8)
+
+    """
+
+    def __init__(self, precision=6, **kwargs):
+        assert(0 < precision <= 8)
+        if "n_bits" in kwargs.keys() or "starting_bit" in kwargs.keys():
+            raise RuntimeError("Encoder interface has changed from n_bit to precision")
+        self.precision = precision
+        self.magnitude = None, None
+
+    @preserve_type
+    def transform(self, X):
+
+        def get_int_magnitude(X_):
+            # separate case for integers to increase precision.
+            # ensures X_quantized is just a shift.
+            magnitude = X_.max()
+            if magnitude < 0:
+                return 0
+            shift = self.precision-np.ceil(np.log2(X_.max()+1))
+            return (2**self.precision-1) * 0.5**shift
+
+        if np.issubdtype(X.dtype, np.signedinteger):
+            magnitude_p = get_int_magnitude(+X)
+            magnitude_n = get_int_magnitude(-X)
+        elif np.issubdtype(X.dtype, np.integer):
+            magnitude_p = get_int_magnitude(+X)
+            magnitude_n = 0
+        else:
+            magnitude_p = np.max(+X.max(), 0)
+            magnitude_n = np.max(-X.min(), 0)
+
+        X = X.astype(np.float)
+
+        dequantization_scale = (1 - 0.5 ** self.precision) * 2
+        self.magnitude = magnitude_p/dequantization_scale, magnitude_n/dequantization_scale
+
+        # Takes inputs in the range 0-1 ands splits into n (=precision) bitplanes
+        def get_bits_unit_positive(X_, precision):
+            X_quantized = (X_ * (2**precision-1) + 0.5).astype(np.uint8)
+            X_bits = np.unpackbits(X_quantized[:, None], axis=1, bitorder='big')[:, -precision:]
+            return X_bits.reshape(-1, *X_bits.shape[2:])
+
+        magnitude_p_safe = magnitude_p if magnitude_p != 0 else 1
+        magnitude_n_safe = magnitude_n if magnitude_n != 0 else 1
+
+        if magnitude_n <= 0:
+            return get_bits_unit_positive(np.clip(+X/magnitude_p_safe, 0, 1), self.precision)
+        if magnitude_p <= 0:
+            return get_bits_unit_positive(np.clip(-X/magnitude_n_safe, 0, 1), self.precision)
+
+        Xp_bits = get_bits_unit_positive(np.clip(+X/magnitude_p_safe, 0, 1), self.precision)
+        Xn_bits = get_bits_unit_positive(np.clip(-X/magnitude_n_safe, 0, 1), self.precision)
+
+        return np.concatenate((Xp_bits, Xn_bits), 0)
+
+    def get_params(self):
+        """
+        internal information necessary to undo the transformation,
+        must be passed to the SeparatedBitPlanDecoder init.
+        """
+        return {'precision': self.precision, 'magnitude_p': self.magnitude[0], 'magnitude_n': self.magnitude[1]}
+
+
+class SeparatedBitPlanDecoder(BaseTransformer):
+    def __init__(self, precision, magnitude_p=1, magnitude_n=0, decoding_decay=0.5):
+        """Init takes the output of the get_params() method of the SeparatedBitPlanEncoder"""
+        self.precision = precision
+        self.magnitude_p = magnitude_p
+        self.magnitude_n = magnitude_n
+        self.decoding_decay = decoding_decay
+
+    @preserve_type
+    def transform(self, X):
+        n_out, n_features = X.shape
+        sides = 2 if (self.magnitude_n > 0 and self.magnitude_p > 0) else 1
+        n_dim_0 = int(n_out / (self.precision*sides))
+
+        X = np.reshape(X, (sides, n_dim_0, self.precision, n_features))
+
+        # recombines the bitplanes with the correct weights.
+        def decode_unit_positive(X_):
+            # compute factors for each bit to weight their significance
+            decay_factors = (self.decoding_decay ** np.arange(self.precision)).astype('float32')
+            if self.precision < 16:
+                d = {'X' + str(i): X_[:, i] for i in range(self.precision)}
+                d.update({'decay_factors' + str(i): decay_factors[i] for i in range(self.precision)})
+                eval_str = ' + '.join(['X' + str(i) + '*' + 'decay_factors' + str(i) for i in range(self.precision)])
+                X_dec = ne.evaluate(eval_str, d)
+            else:
+                # fallback to slower version if n_bits > 15 because of
+                # https://gitlab.lighton.ai/main/lightonml/issues/58
+                X_dec = np.einsum('ijk,j->ik', X_, decay_factors).astype('float32')
+            return X_dec
+
+        X_transformed = X.astype(np.float)
+        Xp_transformed_raw = X_transformed[0]
+        Xn_transformed_raw = X_transformed[1 if sides == 2 else 0]
+        
+        if self.magnitude_n <= 0:
+            return decode_unit_positive(Xp_transformed_raw)*self.magnitude_p
+        if self.magnitude_p <= 0:
+            return -decode_unit_positive(Xp_transformed_raw)*self.magnitude_n
+        
+        Xp_transformed = decode_unit_positive(Xp_transformed_raw)*self.magnitude_p
+        Xn_transformed = decode_unit_positive(Xn_transformed_raw)*self.magnitude_n
+
+        return Xp_transformed - Xn_transformed

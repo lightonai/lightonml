@@ -45,6 +45,7 @@ class OpuDevice(object):
 
     """
 
+    # noinspection PyUnresolvedReferences
     def __init__(self, opu_type: str, frametime_us: int,
                  exposure_us: int, sequence_nb_prelim=0,
                  output_roi: Roi = None, verbose=0, name="opu"):

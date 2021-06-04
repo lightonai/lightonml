@@ -4,6 +4,10 @@
 
 import numpy as np
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from lightonml.internal.device import OpuDevice
+
 
 def rev(tuple_in):
     """convert back and forth between cartesian
@@ -32,6 +36,7 @@ def recurse_update(d, u):
     """
     import collections
     for k, v in u.items():
+        # noinspection PyUnresolvedReferences
         if isinstance(v, collections.abc.Mapping):
             d[k] = recurse_update(d.get(k, {}), v)
         else:
@@ -152,11 +157,6 @@ class DeprecatedParam:
             return a_callable(*args, **kwargs)
 
         return wrapper
-
-
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from lightonml.internal.device import OpuDevice
 
 
 def detect_trigger_issue(device: "OpuDevice"):

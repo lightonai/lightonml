@@ -5,29 +5,52 @@ from os.path import join, exists
 import pickle
 import json
 from pathlib import Path
-
 import numpy as np
-from sklearn.utils import check_random_state
 import requests
+
+import lightonml
 
 
 def get_ml_data_dir_path():
-    """Get the data directory folder from the JSON config file.
+    """Get the data directory folder.
+
+    It can be defined from the following locations (listed in decreasing priority):
+    * LIGHTONML_DATA_DIR environment variable
+    * lightonml.set_ml_data_dir() function
+    * ~/.lighton.json
+    * /etc/lighton.json
+    * /etc/lighton/host.json
+
+    For JSON files the parameter is to be defined the `ml_data_path` field.
 
     Return
     -------
     pathlib.Path, location of the data folder.
     """
-    sys_lighton_cfg = Path('/etc/lighton.json')
-    user_lighton_cfg = Path.home()/'.lighton.json'
+    # Get data dirs location by order of priority, will stop at first valid one
+    locations = \
+        [os.environ.get("LIGHTONML_DATA_DIR"),
+         lightonml.get_ml_data_dir(),
+         Path.home() / '.lighton.json',
+         Path('/etc/lighton.json'),
+         Path('/etc/lighton/host.json')]
 
-    if sys_lighton_cfg.is_file():
-        config_data = json.loads(sys_lighton_cfg.read_text())
-    elif user_lighton_cfg.is_file():
-        config_data = json.loads(user_lighton_cfg.read_text())
+    for loc in locations:
+        data_dir = None
+        if isinstance(loc, Path):
+            if loc.exists():
+                config_data = json.loads(loc.read_text())
+                data_dir = Path(config_data.get('ml_data_path'))
+        else:
+            # environment variable or module-level data dir
+            data_dir = Path(loc) if loc else None
+        if data_dir:
+            break
     else:
-        raise FileNotFoundError("Can't find a lighton.json folder.")
-    return Path(config_data['ml_data_path'])
+        raise FileNotFoundError("Couldn't find any candidate for lightonml's data directory.\n"
+                                "Please provide a directory through lightonml.set_ml_data_dir(), "
+                                "LIGHTONML_DATA_DIR environment variable, or a lighton.json configuration file\n")
+    return data_dir
 
 
 def download(url, directory):
@@ -114,6 +137,7 @@ def select_subset(X, y, classes=range(10), ratio=1, random_state=None):
     n_samples = len(ind_sel)
 
     if ratio != 1:
+        from sklearn.utils import check_random_state
         random_state = check_random_state(random_state)
         ind_sel = random_state.choice(ind_sel, size=int(n_samples * ratio), replace=False)
 

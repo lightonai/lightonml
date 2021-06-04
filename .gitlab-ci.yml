@@ -1,0 +1,44 @@
+variables:
+  TWINE_REPOSITORY_URL: "https://nexus.lighton.ai/repository/lighton/"
+  TWINE_USERNAME: "lighton-deploy"
+  REGISTRY: nexus.lighton.ai:5000
+
+python pakage:
+  # Build wheel and make it an artifact
+  stage: build
+  image: python:3.8
+  script:
+    - python setup.py bdist_wheel
+  artifacts:
+    paths:
+      - dist/*.whl
+
+test:
+  # Image built from tests/Dockerfile, must exist in the registry.after_script:
+  # Update tag here if the Dockerfile changes!
+  image: $REGISTRY/lightonml-test:pyt-1.7.1-sklearn-0.24
+  stage: test
+  variables:
+    # Needed to install lightonopu
+    PIP_EXTRA_INDEX_URL: https://lighton-pypi:4if2632!.3C@nexus.lighton.ai/repository/lighton/simple
+    # Set ml data dir to /tmp, so that MNIST gets downloaded here (TODO mount /data/mldata, or cache it)
+    LIGHTONML_DATA_DIR: /tmp
+  script:
+    - pip install . lightonopu
+    - python run-tests.py --no-opu
+
+deploy pypi:
+  # Deploy wheel to lighton's pypi repo (only on version tag)
+  # TWINE_PASSWORD variable defined in CI/CD repo settings (value in Bitwarden)
+  stage: deploy
+  image: python:3.8
+  before_script:
+    - pip install twine setuptools_scm
+  script:
+    - python -m twine check dist/*
+    # Make sure it's not a dev release
+    - python scripts/assert_no_dev_release.py $(python setup.py --version)
+    - python -m twine upload dist/*
+  rules:
+    # Execute only when tagged starting with vX (and prevent running from forks)
+    - if: $CI_COMMIT_TAG =~ /^v\d.*/ && $CI_PROJECT_NAMESPACE == "main"

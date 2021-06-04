@@ -5,7 +5,7 @@
 import warnings
 from contextlib import contextmanager
 
-from lightonml.internal.types import OutputRoiStrategy, Tuple2D, Roi
+from lightonml.internal.types import OutputRoiStrategy, Tuple2D
 import numpy as np
 
 
@@ -19,10 +19,11 @@ class SimulatedOpuDevice(object):
 
     frametime_us: int
     exposure_us: int
-    output_roi: tuple(tuple(int))
     verbose: bool
         These parameters are provided only for API compatibility with
         lightonml.internal.device.OpuDevice
+    linear: bool
+        Whether the OPU simulates a linear operation or not
 
     Attributes
     ----------
@@ -32,14 +33,15 @@ class SimulatedOpuDevice(object):
     """
 
     def __init__(self, frametime_us=500, exposure_us=400,
-                 output_roi: Roi = None, verbose=False):
-        self._active = False
-        self._frametime_us = int(frametime_us)
-        self._exposure_us = int(exposure_us)
-        self._output_roi = output_roi
+                 verbose=False, linear=False):
+        self.active = False
+        self.frametime_us = int(frametime_us)
+        self.exposure_us = int(exposure_us)
+        self.output_roi = (0, 0), (2040, 1088)
         self._verbose = verbose
         self._random_matrix = None
         self._seed = None
+        self._linear = linear
 
     def build_random_matrix(self, n_features, n_components, seed=0):
         """
@@ -76,17 +78,13 @@ class SimulatedOpuDevice(object):
         return self
 
     def open(self):
-        self._active = True
+        self.active = True
 
     def close(self):
-        self._active = False
+        self.active = False
 
     def __exit__(self, *args):
         self.close()
-
-    @property
-    def active(self):
-        return self._active
 
     def reserve(self, _):
         pass
@@ -118,7 +116,10 @@ class SimulatedOpuDevice(object):
                           .format(n_rows, n_features))
         else:
             random_matrix = self._random_matrix
-        return np.abs(np.dot(X, random_matrix)) ** 2
+        if self._linear:
+            return np.dot(X, random_matrix).real
+        else:
+            return np.abs(np.dot(X, random_matrix)) ** 2
 
     def transform2(self, X, Y, _=None):
         Y[:] = self.transform1(X)
@@ -167,36 +168,12 @@ class SimulatedOpuDevice(object):
         return 1920, 1080
 
     @property
-    def output_roi(self) -> Roi:
-        return self._output_roi
-
-    @property
     def output_shape(self) -> Tuple2D:
         return self.output_roi[1]
 
-    @output_roi.setter
-    def output_roi(self, value: Roi):
-        self._output_roi = value
-
     @property
     def output_readout_us(self):
-        return self._exposure_us
-
-    @property
-    def exposure_us(self):
-        return self._exposure_us
-
-    @exposure_us.setter
-    def exposure_us(self, value):
-        self._exposure_us = int(value)
-
-    @property
-    def frametime_us(self):
-        return self._frametime_us
-
-    @frametime_us.setter
-    def frametime_us(self, value):
-        self._frametime_us = int(value)
+        return self.exposure_us
 
     @property
     def gain_dB(self):

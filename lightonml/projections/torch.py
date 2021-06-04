@@ -11,8 +11,9 @@ from lightonml.internal.simulated_device import SimulatedOpuDevice
 
 class OPUMap(nn.Module):
     """Adapter of the OPU to the Pytorch interface.
+
     Forward method is mapped to `transform <lightonml.opu.OPU.transform>` of
-    the `OPU <lightonml.opu.OPU>` class, depending on `ndims` parameter at the construction.
+    the `OPU <lightonml.opu.OPU>` class
 
     .. seealso:: `lightonml.opu.OPU`
 
@@ -36,6 +37,8 @@ class OPUMap(nn.Module):
         number of 2d features if the input is packed
     simulated: bool, default False,
         use real or simulated OPU
+    linear: bool, default False,
+        use the linear version of the OPU transform
     max_n_features: int, optional
         maximum number of binary features that the OPU will transform
         used only if simulated=True, in order to initiate the random matrix
@@ -63,6 +66,8 @@ class OPUMap(nn.Module):
         number of 2d features if the input is packed
     simulated: bool, default False,
         use real or simulated OPU
+    linear: bool, default False,
+        use the linear version of the OPU transform (lightonml.opu.OPU.linear_transform)
     max_n_features: int, optional
         maximum number of binary features that the OPU will transform
         used only if simulated=True, in order to initiate the random matrix
@@ -70,7 +75,7 @@ class OPUMap(nn.Module):
         if the OPU parameters have already been chosen.
     """
     def __init__(self, n_components, opu=None, ndims=1, n_2d_features=None, packed=False,
-                 simulated=False, max_n_features=None, verbose_level=-1):
+                 simulated=False, max_n_features=None, verbose_level=-1, linear=False):
         if verbose_level >= 0:
             lightonml.set_verbose_level(verbose_level)
         self.verbose_level = lightonml.get_verbose_level()
@@ -100,6 +105,7 @@ class OPUMap(nn.Module):
         self.n_2d_features = n_2d_features
         self.packed = packed
         self.simulated = simulated
+        self.linear = linear
         self.max_n_features = max_n_features
 
         self.fitted = False
@@ -123,14 +129,15 @@ class OPUMap(nn.Module):
         if not self.fitted:
             print("OPUMap was not fit to data. Performing fit on the first batch with default parameters...")
             self.fit(input)
+        transform = self.opu.linear_transform if self.linear else self.opu.transform
 
         if self.online:
             output = torch.empty((len(input), self.n_components), dtype=torch.uint8)
             for i in range(len(input)):
-                output[i] = self.opu.transform(input[i])
+                output[i] = transform(input[i])
             return output.detach()
         else:
-            output = self.opu.transform(input)
+            output = transform(input)
         return output.detach()
 
     def reset_parameters(self, input, y, n_features, packed, online):

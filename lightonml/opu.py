@@ -5,16 +5,16 @@
 """
 This module contains the OPU class
 """
+from lightonml.encoding.base import NoEncoding, NoDecoding
 import warnings
 from typing import Optional, Union, Tuple
-from warnings import warn
 
 import numpy as np
 from contextlib import ExitStack
 import attr
-
+import inspect
 import lightonml
-from lightonml.internal.config import get_host_option
+from lightonml.internal.config import get_host_option, opu_version
 from lightonml.internal import config, output_roi, utils, types
 from lightonml.internal.user_input import OpuUserInput, InputTraits
 from lightonml.internal.simulated_device import SimulatedOpuDevice
@@ -29,10 +29,15 @@ from lightonml.internal.types import InputRoiStrategy, IntOrTuple, TransformOutp
 class OPU:
     """Interface to the OPU.
 
-    .. math:: \\mathbf{y} = \\lvert \\mathbf{R} \\mathbf{x} \\rvert^2
+    .. math:: \\mathbf{y} = \\lvert \\mathbf{R} \\mathbf{x} \\rvert^2 (non-linear transform, the default)
 
-    Main methods are `transform`, `fit1d` and `fit2d`,
+    .. math:: \\mathbf{y} = \\mathbf{x} \\mathbf{R} (linear transform)
+
+    Main methods are `transform`, `linear_transform`, `fit1d` and `fit2d`,
     and accept NumPy arrays or PyTorch tensors.
+
+    The non-linear transform (`transform`) is a native operation for the OPU, and performs at a higher
+    speed than `linear_transform`.
 
     Acquiring/releasing hardware device resources is done by open/close and a
     context-manager interface.
@@ -59,13 +64,19 @@ class OPU:
     config_override: dict, optional
         for override of the config_file (for dev purpose)
     verbose_level: int, optional
-        deprecated, use lightonml.set_verbose_level instead
+        deprecated, use lightonml.set_verbose_level() instead
+        .. seealso:: `lightonml.set_verbose_level`
     input_roi_strategy: types.InputRoiStrategy, optional
         describes how to display the features on the input device
-        .. seealso:: `lightonml.types.InputRoiStrategy`
+        .. seealso:: `lightonml.internal.types.InputRoiStrategy`
     open_at_init: bool, optional
         forces the setting of acquiring hardware resource at init. If
         not provided, follow system's setting (usually True)
+    disable_pbar: bool, optional
+        disable display of the progress bar when verbose_level is set to 1
+    simulated: bool, optional
+        performs the random projection using CPU, in case no OPU is available on your machine
+        the random matrix is then generated at __init__, using max_n_features and n_components
 
     Attributes
     ----------
@@ -79,16 +90,14 @@ class OPU:
         underlying hardware that performs transformation (read-only)
     input_roi_strategy: types.InputRoiStrategy, optional
         describes how to display the features on the input device
-    verbose_level: int, optional
-        0, 1 or 2. 0 = no messages, 1 = most messages, and 2 = messages
     """
 
     def __init__(self, n_components: int = 200000,
                  opu_device: Optional[Union[OpuDevice, SimulatedOpuDevice]] = None,
                  max_n_features: int = 1000, config_file: str = "",
                  config_override: dict = None, verbose_level: int = -1,
-                 input_roi_strategy: types.InputRoiStrategy = types.InputRoiStrategy.auto,
-                 open_at_init: bool = None, disable_pbar=False):
+                 input_roi_strategy: types.InputRoiStrategy = types.InputRoiStrategy.full,
+                 open_at_init: bool = None, disable_pbar=False, simulated=False):
 
         self.__opu_config = None
         self.__config_file = config_file
@@ -107,9 +116,32 @@ class OPU:
         self._debug = lightonml.get_debug_fn()
         self._trace = lightonml.get_trace_fn()
         self._print = lightonml.get_print_fn()
+        no_config_msg = "No configuration files for the OPU was found on this machine.\n" \
+                        "You may want to run the OPU in a simulated manner, by passing the simulated " \
+                        "argument to True at init.\n" \
+                        "See https://docs.lighton.ai/notes/get_started.html#Simulating-an-OPU " \
+                        "for more details.\n" \
+                        "See also https://lighton.ai/products for getting access to our technology."
+
+        if simulated and opu_device is not None:
+            raise ValueError("simulated and opu_device arguments are conflicting")
 
         # Device init, or take the one passed as input
-        if not opu_device:
+        if opu_device:
+            if not isinstance(opu_device, (SimulatedOpuDevice, OpuDevice)):
+                raise TypeError("opu_device must be of type {} or {}"
+                                .format(SimulatedOpuDevice.__qualname__,
+                                        OpuDevice.__qualname__))
+            self.device = opu_device
+            self._base_frametime_us = self.device.frametime_us
+            self._base_exposure_us = self.device.exposure_us
+        elif simulated:
+            self.device = SimulatedOpuDevice()
+        else:
+            # Instantiate device directly
+            if not self.__config_file and not config.host_has_opu_config():
+                # Looks like there's no OPU on this host as we didn't find configuration files
+                raise RuntimeError(no_config_msg)
             opu_type = self.config["type"]
             self._base_frametime_us = self.config["input"]["frametime_us"]
             self._base_exposure_us = self.config["output"]["exposure_us"]
@@ -118,14 +150,6 @@ class OPU:
             self.device = OpuDevice(opu_type, self._base_frametime_us,
                                     self._base_exposure_us, seq_nb_prelim,
                                     None, verbose_level, name)
-        else:
-            if not isinstance(opu_device, (SimulatedOpuDevice, OpuDevice)):
-                raise TypeError("opu_device must be of type {} or {}"
-                                .format(SimulatedOpuDevice.__qualname__,
-                                        OpuDevice.__qualname__))
-            self.device = opu_device
-            self._base_frametime_us = self.device.frametime_us
-            self._base_exposure_us = self.device.exposure_us
 
         if self._s.simulated:
             # build the random matrix if not done already
@@ -153,8 +177,8 @@ class OPU:
         """Returns transform settings for feeding to TransformRunner"""
         init = TransformSettings(self.input_roi_strategy, self.n_components)
         settings = attr.evolve(init, **override)
-        if no_input:
-            # If no input_roi, just choose a full strategy
+        if no_input and self.input_roi_strategy is InputRoiStrategy.auto:
+            # If no input_roi, replace auto by full strategy
             settings.input_roi_strategy = InputRoiStrategy.full
             assert settings.input_roi is None
         return settings
@@ -183,7 +207,8 @@ class OPU:
         online: bool, optional
             Set to true if the transforms will be made one vector after the other
             defaults to False
-        override: keyword args for overriding transform settings (advanced parameters)
+        override: dict, optional
+            keyword args for overriding transform settings (advanced parameters)
         """
         return self.__fit(X, n_features, packed, online, False, **override)
 
@@ -216,23 +241,28 @@ class OPU:
         online: bool, optional
             Set to true if the transforms will be made one vector after the other
             defaults to False
-        override: keyword args for overriding transform settings (advanced parameters)
+        override: dict, optional
+            keyword args for overriding transform settings (advanced parameters)
         """
         return self.__fit(X, n_features, packed, online, True, **override)
 
-    def transform(self, X) -> TransformOutput:
+    def transform(self, X, encoder_cls=NoEncoding, decoder_cls=NoDecoding) -> TransformOutput:
         """
         Performs the nonlinear random projections of one or several input vectors.
 
         The `fit1d` or `fit2d` method must be called before, for setting vector dimensions
         or online option.
-        If you need to transform one vector after each other,
+        If you need to transform one vector after each other, add `online=True` in the fit function.
 
         Parameters
         ----------
         X:  np.ndarray or torch.Tensor
             input vector, or batch of input vectors.
             Each vector must have the same dimensions as the one given in `fit1d` or `fit2d`.
+        encoder_cls: encoder.base.BaseTransformer, optional
+            class or instance of class that transform the input into binary vectors to be processed by the opu.
+        decoder_cls: encoder.base.BaseTransformer, optional
+            class or instance of class that transforms the output of the opu back into the appropriate format.
 
         Returns
         -------
@@ -245,7 +275,14 @@ class OPU:
         assert self._runner, "Call fit1d or fit2d before transform"
         assert self.device.active, "OPU device isn't active, use opu.open() or \"with opu:\""
 
-        user_input = OpuUserInput.from_traits(X, self._runner.traits)
+        if inspect.isclass(encoder_cls):
+            encoder = encoder_cls()
+        else:
+            encoder = encoder_cls
+
+        X_enc = encoder.transform(X)
+
+        user_input = OpuUserInput.from_traits(X_enc, self._runner.traits)
         self._debug(str(user_input))
 
         if user_input.is_batch:
@@ -257,79 +294,21 @@ class OPU:
                 out = self._runner.transform(user_input)
         else:
             out = self._runner.transform(user_input)
-        Y = user_input.reshape_output(out)
-        # if the input is a tensor, return a tensor in CPU memory
-        if user_input.is_tensor:
-            # noinspection PyPackageRequirements
-            import torch
-            return torch.from_numpy(Y)
-        else:
-            return Y
+        return self._post_transform(out, user_input, encoder, decoder_cls)
 
-    # noinspection PyIncorrectDocstring
-    def transform1d(self, *args, **kwargs) -> TransformOutput:
-        """Performs the nonlinear random projections of one 1d input vector, or
-        a batch of 1d input vectors.
-
-        This function is only for backwards compatibility, prefer using `fit1d` followed
-        by `transform`, or `fit_transform1d`
-
-        .. warning:: when making several transform calls, prefer calling `fit1d`
-            and then `transform`, or you might encounter an inconsistency in the
-            transformation matrix.
-
-        The input data can be bit-packed, where ``n_features = 8*X.shape[-1]``
-        Otherwise ``n_features = X.shape[-1]``
-
-        .. deprecated:: 1.2
-
-        Parameters
-        ----------
-        X: np.ndarray or torch.Tensor
-            a 1d input vector, or batch of 1d input_vectors, binary encoded, packed or not
-            batch can be 1d or 2d. In all cases ``output.shape[:-1] = X.shape[:-1]``
-        packed: bool, optional
-            whether the input data is in bit-packed representation
-            defaults to False
-        override: keyword args for overriding transform settings (advanced parameters)
-
-        Returns
-        -------
-        Y: np.ndarray or torch.Tensor
-             complete array of nonlinear random projections of X,
-             of size self.n_components
-             type is actually ContextArray, with a context attribute to add metadata
+    def linear_transform(self, X, encoder_cls=NoEncoding, decoder_cls=NoDecoding) -> TransformOutput:
         """
-        warn("As of version 1.2 prefer calling fit1d then transform")
-        return self.fit_transform1d(*args, **kwargs)
-
-    # noinspection PyIncorrectDocstring
-    def transform2d(self, *args, **kwargs) -> TransformOutput:
-        """Performs the nonlinear random projections of one 2d input vector, or
-        a batch of 2d input vectors.
-
-        .. warning:: when making several `transform` calls, prefer calling `fit2d`
-            and then `transform`, or you might encounter an inconsistency in the
-            transformation matrix.
-
-        This function is only for backwards compatibility, prefer using `fit2d` followed
-        by transform, or `fit_transform2d`.
-
-        .. deprecated:: 1.2
+        Do a linear transform of X, for Nitro (non-linear) photonic cores.
 
         Parameters
         ----------
-        X: np.ndarray or torch.Tensor
-            a 2d input vector, or batch of 2d input_vectors, binary encoded, packed or not
-        packed: bool, optional
-            whether the input data is in bit-packed representation
-            if True, each input vector is assumed to be a 1d array, and the "real" number
-            of features must be provided as n_2d_features
-            defaults to False
-        n_2d_features: list, tuple or np.ndarray of length 2
-            If the input is bit-packed, specifies the shape of each input vector.
-            Not needed if the input isn't bit-packed.
-        override: keyword args for overriding transform settings (advanced parameters)
+        X:  np.ndarray or torch.Tensor
+            input vector, or batch of input vectors.
+            Each vector must have the same dimensions as the one given in `fit1d` or `fit2d`.
+        encoder_cls: encoding.base.BaseTransformer, optional
+            class or instance of class that transform the input into binary vectors to be processed by the opu.
+        decoder_cls: encoding.base.BaseTransformer, optional
+            class or instance of class that transforms the output of the opu back into the appropriate format.
 
         Returns
         -------
@@ -339,8 +318,29 @@ class OPU:
              If input is an ndarray, type is actually ContextArray,
              with a context attribute to add metadata
         """
-        warn("As of version 1.2 prefer calling fit2d then transform, or fit_transform2d")
-        return self.fit_transform2d(*args, **kwargs)
+        assert self._runner, "Call fit1d or fit2d before linear_transform"
+        traits = self._runner.traits
+
+        if traits.packed:
+            # TODO implement for packed
+            raise RuntimeError("Linear transform isn't yet implemented for packed input :/")
+
+        if inspect.isclass(encoder_cls):
+            encoder = encoder_cls()
+        else:
+            encoder = encoder_cls
+
+        X_enc = encoder.transform(X)
+
+        user_input = OpuUserInput.from_traits(X_enc, traits)
+        _, result_ctx = self._raw_linear_transform(X_enc, traits, user_input)
+        return self._post_transform(result_ctx, user_input, encoder, decoder_cls)
+
+    def transform1d(self, *args, **kwargs):
+        raise RuntimeError("transform1d is deprecated, you must now use fit1d and transform")
+
+    def transform2d(self, *args, **kwargs):
+        raise RuntimeError("transform2d is deprecated, you must now use fit2d and transform")
 
     def fit_transform1d(self, X, packed: bool = False,
                         **override) -> ContextArray:
@@ -439,12 +439,83 @@ class OPU:
             self._runner = TransformRunner(self._s, tr_settings, traits,
                                            device=self.device,
                                            disable_pbar=self.disable_pbar)
+
         self._acq_stack.close()
         if online:
             if self._s.no_single_transform:
                 raise RuntimeError("Online transform isn't available with this OPU")
             # Start acquisition only if online. Batch transform start their own.
             self._acq_stack.enter_context(self.device.acquiring(online=True))
+
+    @staticmethod
+    def _post_transform(output, user_input, encoder, decoder_cls):
+        """Final steps after transform
+           1. reshape
+           2. decode the output
+           3. convert to tensor if user input was tensor
+           """
+        output = user_input.reshape_output(output)
+        # If encoder has get_params method, it's for transmitting it to decoder init
+        if inspect.isclass(decoder_cls):
+            if hasattr(encoder, "get_params"):
+                decoder = decoder_cls(**encoder.get_params())
+            else:
+                decoder = decoder_cls()
+        else:
+            decoder = decoder_cls
+
+        output = decoder.transform(output)
+
+        if user_input.is_tensor:
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
+            import torch
+            return torch.from_numpy(output)
+        else:
+            return output
+
+    def _raw_linear_transform(self, X, traits=None, user_input=None):
+        """
+        Do linear_transform of X, and return both raw OPU output and decoded output in a tuple
+        """
+
+        if traits is None:
+            assert self._runner, "Call fit1d or fit2d before linear_transform"
+            traits = self._runner.traits
+        if user_input is None:
+            user_input = OpuUserInput.from_traits(X, traits)
+
+        if self._s.simulated:
+            prepared_X = X
+        else:
+            assert self.device.acq_state != AcqState.online, \
+                "Can't do linear transform when acquisition is" \
+                " in online mode, only single vectors"
+            assert self._runner.t.input_roi_strategy == InputRoiStrategy.full, \
+                "ROI strategy must be full for linear_transform to be correct.\n" \
+                "Set input_roi_strategy attribute to InputRoiStrategy.full."
+
+            # X2 is now numpy 2D, whatever the initial shape and the type (torch or numpy)
+            X2 = user_input.reshape_input(raveled_features=True, leave_single_dim=True)
+
+            try:
+                import lightonopu.linear_reconstruction as reconstruction
+            except ImportError:
+                raise RuntimeError("Need a lightonopu version with linear_reconstruction module")
+
+            prepared_X = reconstruction.encode_batch(X2)
+            # Restore the dimension after batch encoding to something suitable for formatting
+            prepared_X = user_input.unravel_features(prepared_X)
+        # Run the OPU transform
+        prepared_input = OpuUserInput.from_traits(prepared_X, traits)
+        with self.device.acquiring(n_images=self._s.n_samples_by_pass):
+            rp_opu = self._runner.transform(prepared_input, linear=True)
+        if self._s.simulated:
+            result_ctx = rp_opu
+        else:
+            # Decoding forgets about the context, re-add it to result afterwards
+            result = reconstruction.decode_batch(rp_opu)
+            result_ctx = ContextArray(result, rp_opu.context)
+        return rp_opu, result_ctx
 
     def __enter__(self):
         """Context manager interface that acquires hardware resources
@@ -563,26 +634,31 @@ class OPU:
 
     def _resize_rnd_matrix(self, n_features: int, n_components: int):
         """Resize device's random matrix"""
+        assert isinstance(self.device, SimulatedOpuDevice)
         rnd_mat = self.device.random_matrix
         if rnd_mat is None or rnd_mat.shape != (n_features, n_components):
             self._print("OPU: computing the random matrix... ", end='', flush=True)
             self.device.build_random_matrix(n_features, n_components)
             self._print("OK")
 
-    def version(self):
+    def version(self, devices=False):
         """Returns a multi-line string containing name and versions of the OPU"""
-        from lightonml import __version__ as lgversion
         version = []
 
         # Build OPU name
-        opu_name = self.__opu_config['name']
-        opu_version = self.__opu_config['version']
-        opu_location = self.__opu_config['location']
-        version.append('OPU ' + opu_name+'-'+opu_version+'-'+opu_location)
+        if not self._s.simulated:
+            version.append(opu_version(self.__opu_config))
 
         # module version
-        version.append("lightonml version " + lgversion)
-        version.append(self.device.versions())
+        version.append(f"lightonml version {lightonml.__version__}")
+        try:
+            # noinspection PyUnresolvedReferences
+            import lightonopu
+            version.append(f"lightonopu version {lightonopu.__version__}")
+        except ImportError:
+            pass
+        if devices:
+            version.append(self.device.versions())
         return '\n'.join(version)
 
     def __getstate__(self):
