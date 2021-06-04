@@ -156,6 +156,7 @@ def make_delete_func(name: str):
     in order to have unique atexit registration"""
     # noinspection PyProtectedMember,PyBroadException
     def delete_func(pidfile_):
+        # noinspection PyPep8
         try:
             pidfile_._remove()
         except:

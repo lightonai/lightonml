@@ -16,6 +16,7 @@ class InputDevice:
     device.display1d([1, 1, 1, 1l)
     """
     def __init__(self, frametime_us=500, verbose=False):
+        # noinspection PyUnresolvedReferences
         from lightonopu import inputdev_pybind
         self.device = inputdev_pybind.InputDevice(verbose)
         # Currently only Model1 is supported (column order)

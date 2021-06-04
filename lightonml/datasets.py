@@ -1,9 +1,17 @@
 # -*- coding: utf8
 """This module contains functions to load some common datasets. All datasets return tuples of train and test examples
 and labels. Grayscale images have shape (height, width), RGB images have shape (3, height, width).
-All functions look for a `.lightonml_config` file to read the data location. If it doesn't exist, they create one,
-with your home directory as the default data directory location. You can change it by changing the config file
-`.lighton.json`."""
+
+All functions use the data location provided by `lightonml.utils.get_ml_data_dir_path`.
+
+This location can be defined from the following sources (listed in decreasing priority):
+* `LIGHTONML_DATA_DIR` environment variable
+* `lightonml.set_ml_data_dir()` function
+* `~/.lighton.json` file
+* `/etc/lighton.json` file
+* `/etc/lighton/host.json` file
+"""
+
 import gzip
 import itertools
 import os
@@ -12,7 +20,7 @@ import tarfile
 
 import numpy as np
 
-from .utils import get_ml_data_dir_path, download
+from lightonml.utils import get_ml_data_dir_path, download
 
 
 def MNIST():
@@ -26,10 +34,10 @@ def MNIST():
         test flattened MNIST images and labels.
     """
     urls = [
-        'http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz',
-        'http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz',
-        'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz',
-        'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz'
+        'https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz',
+        'https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz',
+        'https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz',
+        'https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz'
     ]
 
     data_home = get_ml_data_dir_path()
@@ -154,7 +162,7 @@ def STL10(unlabeled=False):
     binary_data_path = data_home / 'STL10/stl10_binary'
     train_images_path = str(binary_data_path / 'train_X.bin')
     test_images_path = str(binary_data_path / 'test_X.bin')
-    train_labels_path = str(binary_data_path/ 'train_y.bin')
+    train_labels_path = str(binary_data_path / 'train_y.bin')
     test_labels_path = str(binary_data_path / 'test_y.bin')
 
     with open(train_images_path, 'rb') as f:
@@ -216,6 +224,7 @@ def CIFAR10():
     test_images = test_batch['data']
     test_labels = test_batch['labels']
 
+    # noinspection PyArgumentList
     X_train = np.concatenate(train_images, axis=0).reshape(-1, 3, 32, 32)
     X_test = test_images.reshape(-1, 3, 32, 32)
 

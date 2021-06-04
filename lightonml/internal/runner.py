@@ -5,6 +5,7 @@
 # noinspection PyProtectedMember
 import time
 import datetime as dt
+import warnings
 from functools import partial
 from typing import TYPE_CHECKING, Callable
 import numpy as np
@@ -13,7 +14,7 @@ import pkg_resources
 from lightonml import get_verbose_level
 from lightonml.context import Context, ContextArray
 from lightonml.internal.device import OpuDevice, AcqState
-from lightonml.internal import utils, types
+from lightonml.internal import utils
 from lightonml.internal.input_roi import InputRoi
 from lightonml.internal.formatting import model1_formatter, model1_plain_formatter, FlatFormatter
 from lightonml.internal.user_input import OpuUserInput, InputTraits
@@ -26,9 +27,16 @@ if TYPE_CHECKING:
 class TransformRunner:
     """Internal class for use with OPU transform
 
+    The runner is responsible for initiating and running transform according
+    to OPU input traits and setting.
+
+    It runs the transform directly by talking to the OPU device.
+
     This class is short-lived for each OPU fit, and bound to an InputTraits
     (calling transform on it with different traits will raise an error) 
     After Init with opu_input or features_shape, it can be used to run a transform
+
+    When fit is called on real data, use FitTransformRunner instead (child class below)
     """
 
     def __init__(self, opu_settings: "OpuSettings", settings: "TransformSettings",
@@ -57,6 +65,11 @@ class TransformRunner:
         if self._traits.n_features_s > self.s.max_n_features:
             raise ValueError("input's number of features ({}) can't be greater than {}"
                              .format(self._traits.n_features_s, self.s.max_n_features))
+
+        # Get the function used to compute ROI, uses self if not coming from child FitTransformRunner
+        if roi_compute is None:
+            roi_compute = self._roi_compute
+
         # Get a formatter
         if not self.s.simulated:
             self.formatter = self._configure_formatting(roi_compute)
@@ -83,48 +96,41 @@ class TransformRunner:
         """Traits of user input fon which the runner is fit"""
         return self._traits
 
-    @property
-    def _auto_input_roi(self):
-        # Whether input roi should be computed automatically
-        return self.t.input_roi is None \
-               and self.t.input_roi_strategy == types.InputRoiStrategy.auto
+    def _roi_compute(self):
+        """Computes input ROI when Runner is instantiated with only traits, not data"""
+        roi = InputRoi(self.s.input_shape, self.s.ones_range)
+        return roi.compute_roi(self.t.input_roi_strategy,
+                               self._traits.n_features)
 
     def _configure_formatting(self, roi_compute):
         """
-        Computes input ROI, and returns a Formatter object
-        roi_compute is an optional caller that provides input ROI computation,
-        used with "fit formatting" (use input data for computing formatting, in
-        FitTransformRunner, see class below)
+        Computes input ROI (unless manually defined), and returns a Formatter object
+        roi_compute is an caller that provides input ROI computation, used unless input_roi
+        is manually specified.
+
+        If opu is fit with user data, roi_compute is function of child FitTransformRunner
+        Else it is computed
         """
         if self.input_matches_max:
             # Formatter in this case is straight-forward, plain formatter
             self._debug("Plain formatter")
             return model1_plain_formatter(self.s.input_shape)
 
-        roi = InputRoi(self.s.input_shape, self.s.ones_range)
-
-        # Compute input device ROI
-        if self._auto_input_roi:
-            # Here we assume that roi_compute is a function, provided by init
-            # of FitTransformRunner
-            offset, size = roi_compute()
-        elif self.t.input_roi:
-            # It's specified by the user
-            offset, size = self.t.input_roi
-        else:
-            # Here input_roi_strategy is forced by user to full or small, just compute it
-            # normally (no need to compute number of ones)
-            offset, size = roi.compute_roi(self.t.input_roi_strategy,
-                                           self._traits.n_features)
+        # Compute input ROI unless user provided one
+        offset, size = self.t.input_roi or roi_compute()
         # Instantiate formatter
         return model1_formatter(self.s.input_shape, self._traits.n_features, offset, size)
 
-    def transform(self, input_vectors: OpuUserInput):
+    def transform(self, input_vectors: OpuUserInput, linear=False):
         """Do the OPU transform of input
-        If batch transform, device acquisition must be started"""
+        If batch transform, device acquisition must be started
+        """
         assert self.device.active and input_vectors.traits == self._traits
         if not self.s.simulated:
             input_vectors.binary_check()
+        else:
+            # In simulated mode, SimulatedDevice must whether the transform is linear or not
+            self.device._linear = linear
         context = self._get_context()
         self._pre_print(self.device, input_vectors.n_samples)
         X = input_vectors.reshape_input()
@@ -230,16 +236,16 @@ class TransformRunner:
         return context
 
     def _pre_print(self, device, shape):
-        self._print('OPU: random projections of an array of'
-                    ' size {}'.format(shape))
-        self._print("OPU: using frametime {} μs, exposure {} μs, "
-                    "output ROI {}".format(device.frametime_us,
-                                           device.exposure_us,
-                                           device.output_roi))
+        self._print(f'OPU: random projections of an array of'
+                    f' size {shape}')
+        self._print(f"OPU: using frametime {device.frametime_us} μs, exposure {device.exposure_us} μs, "
+                    f"output ROI {device.output_roi}")
 
     def _adjust_frametime(self):
         """frametime can be lower than output readout in large ROI"""
         # Changing ROI, or raising exposure, can change minimum frame-time
+        if not self.device:
+            return
         min_frametime_us = max(self.device.output_readout_us,
                                self.device.exposure_us) + 50
         if self.t.frametime_us != 0:
@@ -253,14 +259,21 @@ class TransformRunner:
             self.device.frametime_us = self.s.frametime_us
 
     def _adjust_exposure(self):
+        if not self.device:
+            return
         ones_factor = self.ones_info.get("value", None)
         # Exposure overridden by transform settings
         if self.t.exposure_us != 0:
             self.device.exposure_us = self.t.exposure_us
-        elif self._auto_input_roi and ones_factor and ones_factor > 1:
+            self._debug(f"Base exposure overridden at {self.t.exposure_us} µs")
+            if ones_factor is not None and ones_factor > 1:
+                warnings.warn("Exposure is overridden, while it would need to "
+                              f"be reduced by a factor {ones_factor}")
+        elif ones_factor is not None and ones_factor > 1:
             # check_ones > 1 means too much ones on the input device
             # we have to lower exposure in order not to saturate excessively
             self.device.exposure_us = self.s.exposure_us / ones_factor
+            self._debug(f"Reducing exposure by a factor {ones_factor}")
         else:
             self.device.exposure_us = self.s.exposure_us
 
@@ -309,7 +322,7 @@ class FitTransformRunner(TransformRunner):
 
     def __init__(self, opu_settings: "OpuSettings", settings: "TransformSettings",
                  user_input: OpuUserInput, device: OpuDevice = None,
-                 disable_pbar = False):
+                 disable_pbar=False):
         # Send the roi_compute method as the ROI compute function
         comp_func = partial(self.roi_compute, user_input)
         super().__init__(opu_settings, settings, user_input.traits,
@@ -327,5 +340,5 @@ class FitTransformRunner(TransformRunner):
         self._debug("Counted an average of"
                     " {:.2f} ones in input of size {} ({:.2f}%)."
                     .format(n_ones, n_features_s, 100 * n_ones / n_features_s))
-        return roi.compute_roi(types.InputRoiStrategy.auto,
+        return roi.compute_roi(self.t.input_roi_strategy,
                                self._traits.n_features, n_ones, self.ones_info)
