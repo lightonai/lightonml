@@ -2,7 +2,7 @@
 
 [![Twitter Follow](https://img.shields.io/twitter/follow/LightOnIO.svg?style=social)](https://twitter.com/LightOnIO) [![PyPi Version](https://img.shields.io/pypi/v/lightonml.svg)](https://pypi.python.org/pypi/lightonml/) [![Python Versions](https://img.shields.io/pypi/pyversions/lightonml.svg)](https://pypi.python.org/pypi/lightonml/)
 
-LightOnML is a high level machine learning-oriented API that allows to perform nonlinear random projections on
+LightOnML is a high level machine learning-oriented API that allows to perform random projections on
 LightOn’s optical processing units (OPUs). LightOn’s OPUs are available through [LightOn’s Cloud service](https://cloud.lighton.ai).
 
 ## Features
