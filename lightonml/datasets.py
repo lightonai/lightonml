@@ -5,11 +5,12 @@ and labels. Grayscale images have shape (height, width), RGB images have shape (
 All functions use the data location provided by `lightonml.utils.get_ml_data_dir_path`.
 
 This location can be defined from the following sources (listed in decreasing priority):
-* `LIGHTONML_DATA_DIR` environment variable
-* `lightonml.set_ml_data_dir()` function
-* `~/.lighton.json` file
-* `/etc/lighton.json` file
-* `/etc/lighton/host.json` file
+
+ * `LIGHTONML_DATA_DIR` environment variable
+ * `lightonml.set_ml_data_dir()` function
+ * `~/.lighton.json` file
+ * `/etc/lighton.json` file
+ * `/etc/lighton/host.json` file
 """
 
 import gzip

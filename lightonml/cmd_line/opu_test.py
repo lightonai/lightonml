@@ -11,8 +11,9 @@ from lightonml import OPU
 from lightonml.internal import config
 
 
-def transform(n_images, n_features, n_components=0, disable_pbar=False, linear=False):
-    opu = OPU(disable_pbar=disable_pbar, open_at_init=False)
+def transform(n_images, n_features, n_components=0, disable_pbar=False,
+              linear=False, config_file=""):
+    opu = OPU(disable_pbar=disable_pbar, open_at_init=False, config_file=config_file)
     if n_components != 0:
         opu.n_components = n_components
     ins = np.ones((n_images, n_features), dtype=np.uint8)
@@ -38,6 +39,7 @@ def main():
     parser.add_argument("-nf", "--n-features", type=int,
                         help="number of features", default=100)
     parser.add_argument("-v", "--verbose", type=int, default=1)
+    parser.add_argument('-c', '--config-file', help="override config file", default="")
     parser.add_argument("-V", "--version", action='store_true',
                         help="Print OPU and libraries version and exit")
     parser.add_argument("-l", "--linear", action="store_true")

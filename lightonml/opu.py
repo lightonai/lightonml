@@ -5,6 +5,7 @@
 """
 This module contains the OPU class
 """
+from math import sqrt
 from lightonml.encoding.base import NoEncoding, NoDecoding
 import warnings
 from typing import Optional, Union, Tuple
@@ -23,6 +24,7 @@ from lightonml.context import ContextArray
 from lightonml.internal.settings import OpuSettings, TransformSettings
 from lightonml.internal.runner import TransformRunner, FitTransformRunner
 from lightonml.internal.types import InputRoiStrategy, IntOrTuple, TransformOutput
+from lightonml.types import OutputRescaling
 
 
 # noinspection PyPep8Naming
@@ -77,11 +79,18 @@ class OPU:
     simulated: bool, optional
         performs the random projection using CPU, in case no OPU is available on your machine
         the random matrix is then generated at __init__, using max_n_features and n_components
+    rescale: types.OutputRescaling, optional,
+        output rescaling method for `linear_transform`.
+        Ignored by `transform`.
+        .. seealso:: `lightonml.types.OutputRescaling`
 
     Attributes
     ----------
     n_components: int
         dimensionality of the target projection space.
+    rescale: types.OutputRescaling,
+        output rescaling method for `linear_transform`.
+        Ignored by `transform`.
     max_n_features: int
         maximum number of binary features that the OPU will transform
         writeable only if opu_device is a SimulatedOpuDevice,
@@ -97,13 +106,15 @@ class OPU:
                  max_n_features: int = 1000, config_file: str = "",
                  config_override: dict = None, verbose_level: int = -1,
                  input_roi_strategy: types.InputRoiStrategy = types.InputRoiStrategy.full,
-                 open_at_init: bool = None, disable_pbar=False, simulated=False):
+                 open_at_init: bool = None, disable_pbar=False, simulated=False,
+                 rescale: Union[OutputRescaling, str] = OutputRescaling.variance):
 
         self.__opu_config = None
         self.__config_file = config_file
         self.__config_override = config_override
         self._max_n_features = max_n_features
         self.disable_pbar = disable_pbar
+        self.rescale = rescale
 
         # Get trace and print functions
         if verbose_level != -1:
@@ -133,8 +144,6 @@ class OPU:
                                 .format(SimulatedOpuDevice.__qualname__,
                                         OpuDevice.__qualname__))
             self.device = opu_device
-            self._base_frametime_us = self.device.frametime_us
-            self._base_exposure_us = self.device.exposure_us
         elif simulated:
             self.device = SimulatedOpuDevice()
         else:
@@ -143,13 +152,14 @@ class OPU:
                 # Looks like there's no OPU on this host as we didn't find configuration files
                 raise RuntimeError(no_config_msg)
             opu_type = self.config["type"]
-            self._base_frametime_us = self.config["input"]["frametime_us"]
-            self._base_exposure_us = self.config["output"]["exposure_us"]
+            frametime_us = self.config["input"]["frametime_us"]
+            exposure_us = self.config["output"]["exposure_us"]
             seq_nb_prelim = self.config.get("sequence_nb_prelim", 0)
             name = self.config["name"]
-            self.device = OpuDevice(opu_type, self._base_frametime_us,
-                                    self._base_exposure_us, seq_nb_prelim,
+            self.device = OpuDevice(opu_type, frametime_us, exposure_us, seq_nb_prelim,
                                     None, verbose_level, name)
+        self._base_frametime_us = self.device.frametime_us
+        self._base_exposure_us = self.device.exposure_us
 
         if self._s.simulated:
             # build the random matrix if not done already
@@ -334,7 +344,15 @@ class OPU:
 
         user_input = OpuUserInput.from_traits(X_enc, traits)
         _, result_ctx = self._raw_linear_transform(X_enc, traits, user_input)
-        return self._post_transform(result_ctx, user_input, encoder, decoder_cls)
+        # Decoding, add context, and optional convert back to torch if needed
+        output = self._post_transform(result_ctx, user_input, encoder, decoder_cls)
+        # Rescale the output, intentionally after the decoding step
+        if self.rescale is OutputRescaling.variance:
+            n_features = user_input.n_features_s
+            output = output / (self._s.stdev * sqrt(n_features))
+        elif self.rescale is OutputRescaling.norm:
+            output = output / (self._s.stdev * sqrt(self.n_components))
+        return output
 
     def transform1d(self, *args, **kwargs):
         raise RuntimeError("transform1d is deprecated, you must now use fit1d and transform")
@@ -570,6 +588,19 @@ class OPU:
         return self.__opu_config
 
     @property
+    def rescale(self):
+        return self._rescale
+
+    @rescale.setter
+    def rescale(self, value):
+        # If str it's the enum value
+        if isinstance(value, str):
+            self._rescale = OutputRescaling[value.lower()]
+        else:
+            assert isinstance(value, OutputRescaling)
+            self._rescale = value
+
+    @property
     def max_n_components(self):
         return self._output_roi.max_components
 
@@ -630,6 +661,7 @@ class OPU:
             n_tries=self.config.get("n_transform_tries", 5),
             detect_trigger=self.config.get("detect_trigger_issue", False),
             no_single_transform=self.config.get("no_single_transform", False),
+            stdev=self.config["output"].get("stdev", 1.),
             **kwargs)
 
     def _resize_rnd_matrix(self, n_features: int, n_components: int):

@@ -49,6 +49,8 @@ class OpuSettings(object):
     detect_trigger = attrib(type=bool, default=False)
     # If single transform isn't working, use batch instead
     no_single_transform = attrib(type=bool, default=False)
+    # stdev of the random features, for the output rescaling
+    stdev = attrib(type=float, default=1.)
 
 
 @attrs
