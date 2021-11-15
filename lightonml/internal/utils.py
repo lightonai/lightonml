@@ -6,7 +6,7 @@ import numpy as np
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from lightonml.internal.device import OpuDevice
+    from lightonopu.internal.device import OpuDevice
 
 
 def rev(tuple_in):

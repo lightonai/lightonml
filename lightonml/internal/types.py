@@ -47,6 +47,13 @@ class FeaturesFormat (Enum):
     elements of the input device"""
 
 
+class AcqState(Enum):
+    """Acquisition state (see common/include/opu_types.hpp)"""
+    stopped = 1
+    batch = 2
+    online = 3
+
+
 IntList = Union[List[int], np.ndarray]
 Tuple2D = Tuple[int, int]
 Roi = Tuple[Tuple2D, Tuple2D]

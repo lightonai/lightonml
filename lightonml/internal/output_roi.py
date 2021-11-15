@@ -2,8 +2,9 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 
-from lightonml.internal.types import OutputRoiStrategy, Roi, Tuple2D
+from lightonml.internal.types import Roi, Tuple2D
 import numpy as np
+from lightonml.internal.types import OutputRoiStrategy
 
 
 class OutputRoi:
@@ -36,7 +37,9 @@ class OutputRoi:
         assert np.less_equal(total_allowed, output_shape).all()
         # If we fill the whole output width, we must be sure that
         # X offset is 0
-        if self.strategy is OutputRoiStrategy.mid_width:
+        # Compare values, since self.strategy can be lightonopu.internal.types and
+        # not lightonml.internal.types
+        if self.strategy.value == OutputRoiStrategy.mid_width.value:
             assert self.allowed_roi[0][0] == 0
         assert self.min_components < self.max_components
 
@@ -59,7 +62,9 @@ class OutputRoi:
             raise IndexError("n_components is beyond maximum ({})"
                              .format(self.max_components))
 
-        if self.strategy is OutputRoiStrategy.mid_square:
+        mid_square = OutputRoiStrategy.mid_square.value
+        mid_width = OutputRoiStrategy.mid_width.value
+        if self.strategy.value == mid_square:
             # find the dimensions with the same form factor
             height = np.sqrt(n_components / self.aspect_ratio)
             width = self.aspect_ratio * height
@@ -69,7 +74,7 @@ class OutputRoi:
 
             # center the ROI
             offset = allowed_offset + (allowed_size//2 - size//2)
-        elif self.strategy is OutputRoiStrategy.mid_width:
+        elif self.strategy.value == mid_width:
             height = int(np.ceil(n_components/allowed_size[0]))
             size = [allowed_size[0], height]
             offset = [0, int(allowed_size[1]/2 - height/2)]

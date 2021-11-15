@@ -2,8 +2,7 @@ import pkg_resources
 import warnings
 
 try:
-    package = pkg_resources.get_distribution('lightonml')
-    __version__ = package.version
+    __version__ = pkg_resources.get_distribution('lightonml').version
 except pkg_resources.ResolutionError:
     __version__ = "unversioned"
 

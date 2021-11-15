@@ -13,15 +13,16 @@ import pkg_resources
 
 from lightonml import get_verbose_level
 from lightonml.context import Context, ContextArray
-from lightonml.internal.device import OpuDevice, AcqState
 from lightonml.internal import utils
 from lightonml.internal.input_roi import InputRoi
 from lightonml.internal.formatting import model1_formatter, model1_plain_formatter, FlatFormatter
 from lightonml.internal.user_input import OpuUserInput, InputTraits
 from lightonml.internal.progress import Progress
+from lightonml.internal.types import AcqState
 
 if TYPE_CHECKING:
     from lightonml.internal.settings import OpuSettings, TransformSettings
+    from lightonopu.internal.device import OpuDevice
 
 
 class TransformRunner:
@@ -40,7 +41,7 @@ class TransformRunner:
     """
 
     def __init__(self, opu_settings: "OpuSettings", settings: "TransformSettings",
-                 traits: InputTraits, device: OpuDevice = None,
+                 traits: InputTraits, device: "OpuDevice" = None,
                  roi_compute: Callable = None, disable_pbar=False):
         self.s = opu_settings   # OPU settings
         self.t = settings  # User's transform settings
@@ -194,7 +195,7 @@ class TransformRunner:
                                                       padded_buffer, -1, 1)
             return output[0, :self._out_size], nb_retries
         else:
-            if self.device.acq_state == AcqState.online:
+            if self.device.acq_state and self.device.acq_state.value == AcqState.online.value:
                 transform = self.device.transform_online
             else:
                 transform = self.device.transform_single
@@ -321,7 +322,7 @@ class FitTransformRunner(TransformRunner):
     """
 
     def __init__(self, opu_settings: "OpuSettings", settings: "TransformSettings",
-                 user_input: OpuUserInput, device: OpuDevice = None,
+                 user_input: OpuUserInput, device: "OpuDevice" = None,
                  disable_pbar=False):
         # Send the roi_compute method as the ROI compute function
         comp_func = partial(self.roi_compute, user_input)

@@ -4,8 +4,7 @@
 
 import warnings
 from contextlib import contextmanager
-
-from lightonml.internal.types import OutputRoiStrategy, Tuple2D
+from lightonml.internal.types import Tuple2D
 import numpy as np
 
 
@@ -157,7 +156,7 @@ class SimulatedOpuDevice(object):
 
     @property
     def output_roi_strategy(self):
-        return OutputRoiStrategy.mid_square
+        return None
 
     @property
     def output_roi_increment(self):

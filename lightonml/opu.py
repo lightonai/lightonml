@@ -5,10 +5,13 @@
 """
 This module contains the OPU class
 """
+import time
 from math import sqrt
+import pkg_resources
+
 from lightonml.encoding.base import NoEncoding, NoDecoding
 import warnings
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, TYPE_CHECKING
 
 import numpy as np
 from contextlib import ExitStack
@@ -19,21 +22,23 @@ from lightonml.internal.config import get_host_option, opu_version
 from lightonml.internal import config, output_roi, utils, types
 from lightonml.internal.user_input import OpuUserInput, InputTraits
 from lightonml.internal.simulated_device import SimulatedOpuDevice
-from lightonml.internal.device import OpuDevice, AcqState
 from lightonml.context import ContextArray
 from lightonml.internal.settings import OpuSettings, TransformSettings
 from lightonml.internal.runner import TransformRunner, FitTransformRunner
-from lightonml.internal.types import InputRoiStrategy, IntOrTuple, TransformOutput
+from lightonml.internal.types import InputRoiStrategy, IntOrTuple, TransformOutput, AcqState
 from lightonml.types import OutputRescaling
+# Import lightonopu only for typechecking, as it's an optional module and may not be present
+if TYPE_CHECKING:
+    from lightonopu.internal.device import OpuDevice
 
 
 # noinspection PyPep8Naming
 class OPU:
     """Interface to the OPU.
 
-    .. math:: \\mathbf{y} = \\lvert \\mathbf{R} \\mathbf{x} \\rvert^2 (non-linear transform, the default)
+    .. math:: \\mathbf{y} = \\lvert \\mathbf{R} \\mathbf{x} \\rvert^2 \\mbox{ (non-linear transform, the default)}
 
-    .. math:: \\mathbf{y} = \\mathbf{x} \\mathbf{R} (linear transform)
+    .. math:: \\mathbf{y} = \\mathbf{R}\\mathbf{x} \\mbox{ (linear transform)}
 
     Main methods are `transform`, `linear_transform`, `fit1d` and `fit2d`,
     and accept NumPy arrays or PyTorch tensors.
@@ -102,7 +107,7 @@ class OPU:
     """
 
     def __init__(self, n_components: int = 200000,
-                 opu_device: Optional[Union[OpuDevice, SimulatedOpuDevice]] = None,
+                 opu_device: Optional[Union["OpuDevice", SimulatedOpuDevice]] = None,
                  max_n_features: int = 1000, config_file: str = "",
                  config_override: dict = None, verbose_level: int = -1,
                  input_roi_strategy: types.InputRoiStrategy = types.InputRoiStrategy.full,
@@ -128,8 +133,8 @@ class OPU:
         self._trace = lightonml.get_trace_fn()
         self._print = lightonml.get_print_fn()
         no_config_msg = "No configuration files for the OPU was found on this machine.\n" \
-                        "You may want to run the OPU in a simulated manner, by passing the simulated " \
-                        "argument to True at init.\n" \
+                        "You may want to run the OPU in a simulated manner, by passing the " \
+                        "simulated argument to True at init.\n" \
                         "See https://docs.lighton.ai/notes/get_started.html#Simulating-an-OPU " \
                         "for more details.\n" \
                         "See also https://lighton.ai/products for getting access to our technology."
@@ -139,15 +144,14 @@ class OPU:
 
         # Device init, or take the one passed as input
         if opu_device:
-            if not isinstance(opu_device, (SimulatedOpuDevice, OpuDevice)):
-                raise TypeError("opu_device must be of type {} or {}"
-                                .format(SimulatedOpuDevice.__qualname__,
-                                        OpuDevice.__qualname__))
+            if type(opu_device).__name__ not in ["SimulatedOpuDevice", "OpuDevice"]:
+                raise TypeError("opu_device must be of type SimulatedOpuDevice or OpuDevice")
             self.device = opu_device
         elif simulated:
             self.device = SimulatedOpuDevice()
         else:
             # Instantiate device directly
+            from lightonopu.internal.device import OpuDevice
             if not self.__config_file and not config.host_has_opu_config():
                 # Looks like there's no OPU on this host as we didn't find configuration files
                 raise RuntimeError(no_config_msg)
@@ -158,16 +162,23 @@ class OPU:
             name = self.config["name"]
             self.device = OpuDevice(opu_type, frametime_us, exposure_us, seq_nb_prelim,
                                     None, verbose_level, name)
+
         self._base_frametime_us = self.device.frametime_us
         self._base_exposure_us = self.device.exposure_us
 
         if self._s.simulated:
             # build the random matrix if not done already
             self._resize_rnd_matrix(max_n_features, n_components)
+        else:
+            # Make sure lightonopu is at 1.4.1 or later, needed for linear_reconstruction
+            pkg_resources.require("lightonopu>=1.4.1")
+            # initialize linear_reconstruction library
+            from lightonopu import linear_reconstruction
+            linear_reconstruction.init(np.prod(self.device.input_shape))
 
-        self._output_roi = output_roi.OutputRoi(self.device.output_shape_max,
-                                                self.device.output_roi_strategy,
-                                                self._s.allowed_roi, self._s.min_n_components)
+            self._output_roi = output_roi.OutputRoi(self.device.output_shape_max,
+                                                    self.device.output_roi_strategy,
+                                                    self._s.allowed_roi, self._s.min_n_components)
         # This also sets the output ROI
         self.n_components = n_components
         self.input_roi_strategy = input_roi_strategy
@@ -295,9 +306,9 @@ class OPU:
         user_input = OpuUserInput.from_traits(X_enc, self._runner.traits)
         self._debug(str(user_input))
 
-        if user_input.is_batch:
+        if user_input.is_batch and not self._s.simulated:
             # With batch input start acquisition first
-            assert self.device.acq_state != AcqState.online, \
+            assert self.device.acq_state.value != AcqState.online.value, \
                 "Can't transform a batch of vectors when acquisition is" \
                 " in online mode, only single vectors"
             with self.device.acquiring(n_images=self._s.n_samples_by_pass):
@@ -505,7 +516,7 @@ class OPU:
         if self._s.simulated:
             prepared_X = X
         else:
-            assert self.device.acq_state != AcqState.online, \
+            assert self.device.acq_state.value != AcqState.online.value, \
                 "Can't do linear transform when acquisition is" \
                 " in online mode, only single vectors"
             assert self._runner.t.input_roi_strategy == InputRoiStrategy.full, \
@@ -520,18 +531,26 @@ class OPU:
             except ImportError:
                 raise RuntimeError("Need a lightonopu version with linear_reconstruction module")
 
+            start = time.time()
             prepared_X = reconstruction.encode_batch(X2)
+            self._trace(f"Encoding time {time.time() - start} s")
             # Restore the dimension after batch encoding to something suitable for formatting
             prepared_X = user_input.unravel_features(prepared_X)
         # Run the OPU transform
         prepared_input = OpuUserInput.from_traits(prepared_X, traits)
+        start = time.time()
         with self.device.acquiring(n_images=self._s.n_samples_by_pass):
             rp_opu = self._runner.transform(prepared_input, linear=True)
+        self._trace(f"Transform time {time.time() - start} s")
+
         if self._s.simulated:
             result_ctx = rp_opu
         else:
             # Decoding forgets about the context, re-add it to result afterwards
+            start = time.time()
             result = reconstruction.decode_batch(rp_opu)
+            self._trace(f"Decoding time {time.time() - start} s")
+
             result_ctx = ContextArray(result, rp_opu.context)
         return rp_opu, result_ctx
 
@@ -610,9 +629,10 @@ class OPU:
 
     @n_components.setter
     def n_components(self, value: int):
-        self.device.output_roi = self._output_roi.compute_roi(value)
         if self._s.simulated:
             self._resize_rnd_matrix(self.max_n_features, value)
+        else:
+            self.device.output_roi = self._output_roi.compute_roi(value)
         # We used to call device.reserve here, but moved to device.acquiring()
         self._n_components = value
 
@@ -702,7 +722,8 @@ class OPU:
         # acq stack can't be pickled, will be restored
         state.pop("_acq_stack")
         # If acquisition is ongoing, close it
-        state["__online_acq"] = self.device.acq_state == AcqState.online
+        if not self._s.simulated:
+            state["__online_acq"] = self.device.acq_state.value == AcqState.online.value
         self._acq_stack.close()
         # Device itself is closed on pickling
         return state
@@ -715,5 +736,5 @@ class OPU:
         self._print = lightonml.get_print_fn()
         self._acq_stack = ExitStack()
         # Restore online acquisition if it was the case
-        if state["__online_acq"]:
+        if state.get("__online_acq", False):
             self._acq_stack.enter_context(self.device.acquiring(online=True))
