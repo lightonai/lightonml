@@ -6,6 +6,7 @@ These modules contains implementations of Encoders that can transform data
 in the binary `uint8` format required by the OPU. Compatible with numpy.ndarray
 and torch.Tensor.
 """
+import warnings
 import numexpr as ne
 import numpy as np
 import functools
@@ -641,7 +642,9 @@ class SeparatedBitPlanEncoder(BaseTransformer):
     """
 
     def __init__(self, precision=6, **kwargs):
-        assert(0 < precision <= 8)
+        if precision > 6:
+            warnings.warn(f"You are using precision={precision}. 
+            Values greater than 6 rarely result in a performance increase.")
         if "n_bits" in kwargs.keys() or "starting_bit" in kwargs.keys():
             raise RuntimeError("Encoder interface has changed from n_bit to precision")
         self.precision = precision
