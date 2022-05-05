@@ -650,12 +650,10 @@ class SeparatedBitPlanEncoder(BaseTransformer):
         self.precision = precision
         self.magnitude = None, None
 
-    @preserve_type
-    def transform(self, X):
-
+    def fit(self, X, y=None):
         def get_int_magnitude(X_):
             # separate case for integers to increase precision.
-            # ensures X_quantized is just a shift.
+            # ensures X_quantized is just a shift
             magnitude = X_.max()
             if magnitude < 0:
                 return 0
@@ -663,19 +661,39 @@ class SeparatedBitPlanEncoder(BaseTransformer):
             return (2**self.precision-1) * 0.5**shift
 
         if np.issubdtype(X.dtype, np.signedinteger):
+            # todo the output of get_int_magnitude can be lower than X.max(). Is it normal?
             magnitude_p = get_int_magnitude(+X)
             magnitude_n = get_int_magnitude(-X)
         elif np.issubdtype(X.dtype, np.integer):
             magnitude_p = get_int_magnitude(+X)
             magnitude_n = 0
-        else:
+        else:  # X.dtype is not int
+            # todo I think this axis=0 is useless as well as the np.max in the front
             magnitude_p = np.max(+X.max(), 0)
             magnitude_n = np.max(-X.min(), 0)
 
-        X = X.astype(np.float)
-
+        # todo why? this makes everything less precise
         dequantization_scale = (1 - 0.5 ** self.precision) * 2
         self.magnitude = magnitude_p/dequantization_scale, magnitude_n/dequantization_scale
+
+        return self
+
+    @preserve_type
+    def transform(self, X):
+        assert self.magnitude[0] is not None and self.magnitude[1] is not None, \
+            f"fit() method of {self.__class__.__name__} should be called before transform()."
+
+        X = X.astype(np.float)
+
+        magnitude_p = self.magnitude[0]
+        magnitude_n = self.magnitude[1]
+        dequantization_scale = (1 - 0.5 ** self.precision) * 2
+        # Around is necessary because of floating point errors.
+        # Decimals=4 because 1E^-4 is in the order of 1/2^8, the maximum precision of the OPU input
+        # noinspection PyTypeChecker
+        if np.around(+X.max() / (magnitude_p * dequantization_scale), decimals=4) > 1 or \
+                (magnitude_n > 0 and np.around(-X.min() / (magnitude_n * dequantization_scale), decimals=4) > 1):
+            warnings.warn(f"Input has values outside the range of supported values.")
 
         # Takes inputs in the range 0-1 ands splits into n (=precision) bitplanes
         def get_bits_unit_positive(X_, precision):
@@ -686,8 +704,10 @@ class SeparatedBitPlanEncoder(BaseTransformer):
         magnitude_p_safe = magnitude_p if magnitude_p != 0 else 1
         magnitude_n_safe = magnitude_n if magnitude_n != 0 else 1
 
+        # noinspection PyTypeChecker
         if magnitude_n <= 0:
             return get_bits_unit_positive(np.clip(+X/magnitude_p_safe, 0, 1), self.precision)
+        # noinspection PyTypeChecker
         if magnitude_p <= 0:
             return get_bits_unit_positive(np.clip(-X/magnitude_n_safe, 0, 1), self.precision)
 
@@ -748,3 +768,14 @@ class SeparatedBitPlanDecoder(BaseTransformer):
         Xn_transformed = decode_unit_positive(Xn_transformed_raw)*self.magnitude_n
 
         return Xp_transformed - Xn_transformed
+
+
+if __name__ == "__main__":
+    # seed 3 triggers the warning. I believe there is a bug in the integer case but I don't understand it.
+    X = np.random.RandomState(3).randint(0, 1234, size=(1, 6))
+    encoder = SeparatedBitPlanEncoder(precision=4)
+    encoder.fit(X)
+    X_enc = encoder.transform(X)
+    decoder = SeparatedBitPlanDecoder(**encoder.get_params())
+    X_dec = decoder.transform(X_enc)
+
