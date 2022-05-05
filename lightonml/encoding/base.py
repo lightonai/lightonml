@@ -643,8 +643,8 @@ class SeparatedBitPlanEncoder(BaseTransformer):
 
     def __init__(self, precision=6, **kwargs):
         if precision > 6:
-            warnings.warn(f"You are using precision={precision}. 
-            Values greater than 6 rarely result in a performance increase.")
+            warnings.warn(f"You are using precision={precision}. "
+                          f"Values greater than 6 rarely result in a performance increase.")
         if "n_bits" in kwargs.keys() or "starting_bit" in kwargs.keys():
             raise RuntimeError("Encoder interface has changed from n_bit to precision")
         self.precision = precision
